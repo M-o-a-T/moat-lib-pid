@@ -9,17 +9,11 @@ Build-Depends: dh-python, python3-setuptools, python3-all, debhelper (>= 13),
 Standards-Version: 3.9.6
 Homepage: https://m-o-a-t.org
 
-Package: python3-moat-lib-pid
+Package: moat-lib-pid
 Architecture: all
 Depends: ${misc:Depends}, ${python3:Depends},
   python3-anyio (>= 3.0),
 Description: An advanced PID controller
-  .
-  # moat-lib-pid
-  An advanced PID controller in Python. The derivative term can also be used in
-  practice thanks to built-in first-order filter. Detailed information can be
-  found [here](https://en.wikipedia.org/wiki/PID_controller#Derivative_term).
-  .
-  Usage is very simple:
-  .
+  This is an advanced PID controller in Python. The derivative term can be used in
+  practice, thanks to built-in first-order filter.
 
