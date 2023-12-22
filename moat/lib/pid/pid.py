@@ -8,6 +8,8 @@ Created on Wed Jun 22 20:06:38 2022
 
 from warnings import warn
 from math import exp
+from time import monotonic as time
+from moat.util import attrdict
 
 
 class PID:
@@ -29,6 +31,9 @@ class PID:
     def __init__(self, Kp, Ki, Kd, Tf):
         self.set_gains(Kp, Ki, Kd, Tf)
         self.set_output_limits(None, None)
+        self.reset()
+
+    def reset(self):
         self.set_initial_value(None, None, None)
 
     def __call__(self, t, e):
@@ -150,7 +155,7 @@ class PID:
             return False
         return True
 
-    def integrate(self, t, e):
+    def integrate(self, t, e, split=False):
         """Calculates PID controller output.
 
         Parameters
@@ -177,15 +182,97 @@ class PID:
         p = self.Kp * e
         # Calculate integral term
         i = i0 + dt * self.Ki * e
-        i = min(max(i, self.lower), self.upper)
-        # Calcuate derivative term
+        # anti-windup
+        i = min(max(i, self.lower-p), self.upper-p)
+        # Calculate derivative term
         d = 0.0
-        if self.Kd != 0.0 and self.Tf > 0.0:
-            Kn = 1.0 / self.Tf
-            x = -Kn * self.Kd * e0
-            x = exp(-Kn*dt) * x - Kn * (1.0 - exp(-Kn*dt)) * self.Kd * e
-            d = x + Kn * self.Kd * e
-            e = -(self.Tf/self.Kd) * x
+        if self.Kd != 0.0:
+            if self.Tf > 0.0:
+                Kn = 1.0 / self.Tf
+                x = -Kn * self.Kd * e0
+                x = exp(-Kn*dt) * x - Kn * (1.0 - exp(-Kn*dt)) * self.Kd * e
+                d = x + Kn * self.Kd * e
+                e = -(self.Tf/self.Kd) * x
+            else:
+                d = self.Kd * (e-e0) / dt
         # Set initial value for next cycle
         self.set_initial_value(t, e, i)
-        return min(max(p+i+d, self.lower), self.upper)
+
+        res = min(max(p+i+d, self.lower), self.upper)
+        if split:
+            res = (res,(p,i,d))
+        return res
+
+class CPID(PID):
+    """
+    A PID that's configured::
+
+        flow:
+            p: 0.1
+            i: 0.01
+            d: 0.0
+            tf: 0.0  # both must be set
+
+            # output limits
+            min: .3
+            max: .95
+
+            # setpoint change: adjust integral for best guess
+            # input 20, output .8 == 20/.8
+            factor: .04 
+            offset: 0
+
+            state: foo
+    """
+    def __init__(self, cfg, state=None):
+        """
+        @cfg: our configuration. See above.
+        @state: the state storage. Ours is at ``state[cfg.state]``.
+        """
+        super().__init__(cfg.p,cfg.i,cfg.d,cfg.tf)
+        self.cfg = cfg
+        self.set_output_limits(self.cfg.get("min",None),self.cfg.get("max",None))
+
+        if "state" in cfg and state is not None:
+            s = state.setdefault(cfg.state, attrdict())
+        else:
+            s = attrdict()
+        self.state = s
+        self.set_initial_value(time(), s.get("e",0), s.get("i",0))
+        s.setdefault("setpoint",None)
+
+    def setpoint(self, setpoint):
+        """
+        Adjust the setpoint.
+        """
+        if self.state.setpoint == setpoint:
+            return
+        i = self.i0
+        if i is None:
+            i = 0
+        osp = self.state.setpoint
+        if osp is not None:
+            i -= osp*self.cfg.get("factor",0) + self.cfg.get("offset",0)
+        self.state.setpoint = nsp = setpoint
+        i += nsp*self.cfg.get("factor",0) + self.cfg.get("offset",0)
+        self.i0 = i
+
+    def move_to(self, i, o, t=None):
+        """
+        Tell the controller that this input shall result in that output, for now.
+        """
+        if t is None:
+            t = time()
+        self.t0 = t
+        self.i0 = o-(self.state.setpoint-i)*self.Kp
+        self.e0 = 0
+
+    def __call__(self, i, t=None, split=False):
+        if t is None:
+            t = time()
+        res = super().integrate(t, e=self.state.setpoint-i, split=split)
+        _t,e,i = self.get_initial_value()
+        self.state.e = e
+        self.state.i = i
+        return res
+
